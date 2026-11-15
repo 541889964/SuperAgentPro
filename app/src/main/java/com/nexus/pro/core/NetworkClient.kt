@@ -73,7 +73,9 @@ class NetworkClient {
                     val payload = JSONObject(line.substring(5).trim())
                     val p = payload.optString("p", ""); val o = payload.optString("o", ""); val v = payload.opt("v")
                     
-                    if ("message_id" in payload) pId = payload.get("message_id")
+                    // 修复：将 in 替换为 has
+                    if (payload.has("message_id")) pId = payload.get("message_id")
+                    
                     if (payload.has("v") && payload.get("v") is JSONObject) {
                         val nested = payload.getJSONObject("v").optJSONObject("response")
                         if (nested != null) {
@@ -116,6 +118,7 @@ class NetworkClient {
                 } catch (e: Exception) {}
             }
         }
-        finalResp.toString() // 直接返回，去掉 return 关键字，解决 lambda 报错
+        // 修复：使用显式 return@withContext，绝对不报语法错
+        return@withContext finalResp.toString()
     }
 }
