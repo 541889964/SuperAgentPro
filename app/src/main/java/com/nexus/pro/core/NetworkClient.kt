@@ -116,6 +116,6 @@ class NetworkClient {
                 } catch (e: Exception) {}
             }
         }
-        return finalResp.toString()
+        finalResp.toString() // 直接返回，去掉 return 关键字，解决 lambda 报错
     }
 }
