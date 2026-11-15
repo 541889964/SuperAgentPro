@@ -1,8 +1,6 @@
 
-plugins {
-    id 'com.android.application'
-    id 'org.jetbrains.kotlin.android'
-}
+apply plugin: 'com.android.application'
+apply plugin: 'org.jetbrains.kotlin.android'
 
 android {
     namespace 'com.nexus.pro'
@@ -12,8 +10,6 @@ android {
         applicationId "com.nexus.pro"
         minSdk 27
         targetSdk 34
-        versionCode 1
-        versionName "1.0"
     }
 
     buildFeatures {
