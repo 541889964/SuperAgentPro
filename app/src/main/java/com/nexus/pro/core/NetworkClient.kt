@@ -11,49 +11,56 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
-class NetworkClient {
-    private val client = OkHttpClient.Builder().connectTimeout(20, TimeUnit.SECONDS).readTimeout(0, TimeUnit.SECONDS).writeTimeout(30, TimeUnit.SECONDS).retryOnConnectionFailure(true).build()
+class NetworkClient(private val context: Context) {
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(15, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true).build()
+        
     private val BASE = "https://chat.deepseek.com"
     private val JSON_TYPE = "application/json".toMediaType()
-    
     var token = ""; var smid = ""
-    private var sId: String? = null
-    private var pId: Any? = null
+    private var sId: String? = SessionManager.getCurrentId(context)
+    private var pId: Any? = SessionManager.getCurrentPid(context)
+
+    fun resetSession() { sId = null; pId = null; SessionManager.clearCurrent(context) }
 
     private fun headers() = Headers.Builder().add("Authorization", "Bearer " + token).add("Content-Type", "application/json")
         .add("Accept", "text/event-stream").add("x-client-platform", "android").add("x-client-version", "2.8.0")
         .add("x-client-locale", "zh_CN").add("x-client-bundle-id", "com.deepseek.chat").add("User-Agent", "DeepSeek/2.8.0 Android/34")
         .add("x-device-id", smid).add("x-rangers-id", smid).build()
 
-    suspend fun chat(prompt: String, enableThink: Boolean, onThink: (String) -> Unit, onContent: (String) -> Unit): String = withContext(Dispatchers.IO) {
+    suspend fun chat(prompt: String, enableThink: Boolean, onStatus: (String) -> Unit, onThink: (String) -> Unit, onContent: (String) -> Unit): String = withContext(Dispatchers.IO) {
         if (sId == null) {
+            onStatus("正在创建新会话...")
             client.newCall(Request.Builder().url("$BASE/api/v0/chat_session/create").headers(headers()).post("{}".toRequestBody(JSON_TYPE)).build()).execute().use { r ->
                 if (!r.isSuccessful) throw Exception("创建会话失败: ${r.code}")
                 sId = JSONObject(r.body!!.string()).getJSONObject("data").getJSONObject("biz_data").getJSONObject("chat_session").getString("id")
+                SessionManager.saveCurrent(context, sId!!, null)
             }
         }
 
+        onStatus("正在获取 PoW...")
         val powReq = Request.Builder().url("$BASE/api/v0/chat/create_pow_challenge").headers(headers()).post("{\"target_path\":\"/api/v0/chat/completion\"}".toRequestBody(JSON_TYPE)).build()
         val powHeader = client.newCall(powReq).execute().use { r ->
-            if (!r.isSuccessful) throw Exception("PoW失败: ${r.code}")
+            if (!r.isSuccessful) throw Exception("PoW请求失败: ${r.code}")
             val ch = JSONObject(r.body!!.string()).getJSONObject("data").getJSONObject("biz_data").getJSONObject("challenge")
             val prefix = "${ch.getString("salt")}_${ch.getLong("expire_at")}_"
-            val ans = PoW.solve(prefix, ch.getString("challenge"), ch.getInt("difficulty"))
+            val diff = ch.getInt("difficulty")
+            
+            onStatus("C++ 正在极速计算 PoW (难度: $diff)...")
+            val ans = PoW.solve(prefix, ch.getString("challenge"), diff)
+            
             val obj = JSONObject().apply { put("algorithm", ch.getString("algorithm")); put("challenge", ch.getString("challenge")); put("salt", ch.getString("salt")); put("answer", ans); put("signature", ch.optString("signature")); put("target_path", "/api/v0/chat/completion") }
             Base64.encodeToString(obj.toString().toByteArray(), Base64.NO_WRAP)
         }
 
+        onStatus("正在等待 AI 响应...")
         val body = JSONObject().apply {
-            put("chat_session_id", sId)
-            put("parent_message_id", pId)
-            put("prompt", prompt)
-            put("thinking_enabled", enableThink)
-            put("ref_file_ids", JSONArray())
-            put("model_type", JSONObject.NULL)
-            put("action", JSONObject.NULL)
-            put("preempt", false)
-            put("search_enabled", false)
-            put("shumei_device_id", smid)
+            put("chat_session_id", sId); put("parent_message_id", pId); put("prompt", prompt)
+            put("thinking_enabled", enableThink); put("ref_file_ids", JSONArray()); put("model_type", JSONObject.NULL)
+            put("action", JSONObject.NULL); put("preempt", false); put("search_enabled", false); put("shumei_device_id", smid)
         }
 
         val req = Request.Builder().url("$BASE/api/v0/chat/completion").headers(headers().newBuilder().add("x-ds-pow-response", powHeader).build()).post(body.toString().toRequestBody(JSON_TYPE)).build()
@@ -73,9 +80,7 @@ class NetworkClient {
                     val payload = JSONObject(line.substring(5).trim())
                     val p = payload.optString("p", ""); val o = payload.optString("o", ""); val v = payload.opt("v")
                     
-                    // 修复：将 in 替换为 has
                     if (payload.has("message_id")) pId = payload.get("message_id")
-                    
                     if (payload.has("v") && payload.get("v") is JSONObject) {
                         val nested = payload.getJSONObject("v").optJSONObject("response")
                         if (nested != null) {
@@ -91,7 +96,6 @@ class NetworkClient {
                             }
                         }
                     }
-
                     if (p == "response/fragments" && v is JSONArray) {
                         fragments.clear()
                         for (i in 0 until v.length()) {
@@ -118,7 +122,7 @@ class NetworkClient {
                 } catch (e: Exception) {}
             }
         }
-        // 修复：使用显式 return@withContext，绝对不报语法错
+        SessionManager.saveCurrent(context, sId!!, pId?.toString())
         return@withContext finalResp.toString()
     }
 }

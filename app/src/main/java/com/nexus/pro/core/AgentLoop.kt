@@ -3,14 +3,7 @@ package com.nexus.pro.core
 import kotlinx.coroutines.*
 import kotlin.random.Random
 
-data class AgentStep(
-    val stepId: Int,
-    var thought: String = "",
-    var command: String = "",
-    var result: String = "",
-    var isCompleted: Boolean = false,
-    var isError: Boolean = false
-)
+data class AgentStep(val stepId: Int, var thought: String = "", var command: String = "", var result: String = "", var isCompleted: Boolean = false, var isError: Boolean = false)
 
 sealed class AgentEvent {
     data class StepAdded(val step: AgentStep) : AgentEvent()
@@ -65,21 +58,22 @@ class AgentLoop(private val client: NetworkClient) {
                     }
                     
                     val remainMsg = if (maxSteps == 0) "无限" else (maxSteps - stepCounter).toString()
-                    onEvent(AgentEvent.StatusUpdate("正在请求 AI... (剩余步数: " + remainMsg + ")"))
-
-                    // 防封优化：基础随机延迟 1.5s - 4s
-                    val baseDelay = Random.nextLong(1500L, 4000L)
+                    val baseDelay = Random.nextLong(1000L, 2500L)
                     delay(baseDelay)
 
-                    val fullText = client.chat(currentPrompt, true, onThink = { }, onContent = { })
+                    val fullText = client.chat(
+                        prompt = currentPrompt, enableThink = true, 
+                        onStatus = { onEvent(AgentEvent.StatusUpdate(it + " [剩余步数: " + remainMsg + "]")) },
+                        onThink = { }, onContent = { }
+                    )
 
                     if (fullText.contains("【完成】")) {
                         onEvent(AgentEvent.Done)
                         break
                     }
 
-                    val thoughtMatch = Regex("【思考】\\\\n(.*?)(?=\\\\n【执行】)", RegexOption.DOT_MATCHES_ALL).find(fullText)
-                    val actionMatch = Regex("【执行】\\\\n```(?:bash|sh|python|py)?\\\\n(.*?)\\\\n```", RegexOption.DOT_MATCHES_ALL).find(fullText)
+                    val thoughtMatch = Regex("【思考】\\n(.*?)(?=\\n【执行】)", RegexOption.DOT_MATCHES_ALL).find(fullText)
+                    val actionMatch = Regex("【执行】\\n```(?:bash|sh|python|py)?\\n(.*?)\\n```", RegexOption.DOT_MATCHES_ALL).find(fullText)
 
                     val thought = thoughtMatch?.groupValues?.get(1)?.trim() ?: "分析任务中..."
                     val command = actionMatch?.groupValues?.get(1)?.trim()

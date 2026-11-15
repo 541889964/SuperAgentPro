@@ -4,10 +4,7 @@ package com.nexus.pro
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.animation.*
-import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -59,26 +56,27 @@ fun ProApp() {
             },
             bottomBar = { BottomInputBar(accentColor, textColor, subTextColor) }
         ) { padding ->
-            TaskTimeline(Modifier.padding(padding), textColor, subTextColor, accentColor)
+            MainContent(Modifier.padding(padding), textColor, subTextColor, accentColor)
         }
     }
 }
 
-object TaskStarter { 
-    var startTask: (String, Int, String) -> Unit = { _, _, _ -> } 
-}
+object TaskStarter { var startTask: (String, Int, String) -> Unit = { _, _, _ -> } }
 
 @Composable
-fun TaskTimeline(modifier: Modifier, textColor: Color, subTextColor: Color, accentColor: Color) {
+fun MainContent(modifier: Modifier, textColor: Color, subTextColor: Color, accentColor: Color) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val client = remember { NetworkClient() }
+    val client = remember { NetworkClient(context) }
     val loop = remember { AgentLoop(client) }
     
     var steps by remember { mutableStateOf(listOf<AgentStep>()) }
     var isRunning by remember { mutableStateOf(false) }
     var statusMsg by remember { mutableStateOf("") }
     var isReady by remember { mutableStateOf(false) }
+    
+    var showDrawer by remember { mutableStateOf(false) }
+    var sessions by remember { mutableStateOf(SessionManager.getSessions(context)) }
 
     LaunchedEffect(Unit) {
         val (t, s) = RootHelper.extractCredentials()
@@ -88,15 +86,16 @@ fun TaskTimeline(modifier: Modifier, textColor: Color, subTextColor: Color, acce
 
     val startTask = { prompt: String, maxSteps: Int, thinkLevel: String ->
         if (isReady && !isRunning) {
+            SessionManager.addSession(context, "temp_${System.currentTimeMillis()}", prompt.take(10))
+            sessions = SessionManager.getSessions(context)
+            
             steps = emptyList()
             isRunning = true
             statusMsg = "初始化..."
             loop.start(prompt, maxSteps, thinkLevel, scope) { ev ->
                 when (ev) {
                     is AgentEvent.StepAdded -> steps = steps + ev.step
-                    is AgentEvent.ResultUpdated -> {
-                        steps = steps.map { if (it.stepId == ev.stepId) it.copy(result = ev.output, isCompleted = true, isError = ev.code != 0) else it }
-                    }
+                    is AgentEvent.ResultUpdated -> steps = steps.map { if (it.stepId == ev.stepId) it.copy(result = ev.output, isCompleted = true, isError = ev.code != 0) else it }
                     is AgentEvent.StatusUpdate -> statusMsg = ev.msg
                     is AgentEvent.Done -> { isRunning = false; statusMsg = "任务完成" }
                     is AgentEvent.Error -> { isRunning = false; statusMsg = ev.msg }
@@ -107,30 +106,73 @@ fun TaskTimeline(modifier: Modifier, textColor: Color, subTextColor: Color, acce
     }
     LaunchedEffect(Unit) { TaskStarter.startTask = startTask }
 
-    LazyColumn(modifier.fillMaxSize().padding(16.dp)) {
-        if (steps.isEmpty() && !isRunning) {
-            item {
-                Column(Modifier.fillParentMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                    DrawKimiLogo(modifier = Modifier.size(80.dp), color = accentColor)
-                    Spacer(Modifier.height(24.dp))
-                    Text("Super Agent", color = textColor, fontSize = 18.sp, fontWeight = FontWeight.Medium)
-                    Spacer(Modifier.height(8.dp))
-                    Text("设置好参数后，直接下发任务", color = subTextColor, fontSize = 14.sp)
+    Box(modifier.fillMaxSize()) {
+        LazyColumn(Modifier.fillMaxSize().padding(16.dp)) {
+            if (steps.isEmpty() && !isRunning) {
+                item {
+                    Column(Modifier.fillParentMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                        DrawKimiLogo(modifier = Modifier.size(80.dp), color = accentColor)
+                        Spacer(Modifier.height(24.dp))
+                        Text("Super Agent", color = textColor, fontSize = 18.sp, fontWeight = FontWeight.Medium)
+                        Spacer(Modifier.height(8.dp))
+                        Text("在下方设置参数后，直接下发任务", color = subTextColor, fontSize = 14.sp)
+                    }
+                }
+            }
+
+            items(steps, key = { step -> step.stepId }) { step ->
+                TimelineStepItem(step, accentColor, textColor, subTextColor)
+            }
+            
+            if (isRunning || statusMsg.isNotEmpty()) {
+                item {
+                    Row(Modifier.padding(vertical = 16.dp).padding(start = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        if (isRunning) CircularProgressIndicator(modifier = Modifier.size(16.dp), color = accentColor, strokeWidth = 2.dp)
+                        Spacer(Modifier.width(12.dp))
+                        Text(statusMsg, color = subTextColor, fontSize = 13.sp)
+                    }
                 }
             }
         }
 
-        items(steps, key = { step -> step.stepId }) { step ->
-            TimelineStepItem(step, accentColor, textColor, subTextColor)
-        }
-        
-        if (isRunning || statusMsg.isNotEmpty()) {
-            item {
-                Row(Modifier.padding(vertical = 16.dp).padding(start = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (isRunning) CircularProgressIndicator(modifier = Modifier.size(16.dp), color = accentColor, strokeWidth = 2.dp)
-                    Spacer(Modifier.width(12.dp))
-                    Text(statusMsg, color = subTextColor, fontSize = 13.sp)
+        // 侧边栏 (会话管理)
+        if (showDrawer) {
+            Row(Modifier.fillMaxSize().background(Color.Black.copy(0.5f))) {
+                Column(Modifier.width(280.dp).fillMaxHeight().background(Color(0xFF1E1E24)).padding(16.dp)) {
+                    Text("历史会话", color = textColor, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(16.dp))
+                    
+                    LazyColumn(Modifier.weight(1f)) {
+                        items(sessions) { session ->
+                            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Text(session.title, color = textColor, fontSize = 14.sp, modifier = Modifier.clickable {
+                                    client.resetSession()
+                                    steps = emptyList()
+                                    showDrawer = false
+                                })
+                                Text("删除", color = Color.Red, fontSize = 12.sp, modifier = Modifier.clickable { 
+                                    SessionManager.deleteSession(context, session.sId)
+                                    sessions = SessionManager.getSessions(context)
+                                })
+                            }
+                        }
+                    }
+                    
+                    Button(onClick = { showDrawer = false }, modifier = Modifier.fillMaxWidth()) {
+                        Text("关闭")
+                    }
                 }
+                Box(Modifier.weight(1f).fillMaxHeight().clickable { showDrawer = false })
+            }
+        }
+
+        // 左上角菜单按钮 (悬浮)
+        Box(Modifier.padding(top = 60.dp, start = 16.dp).size(36.dp).clip(CircleShape).background(Color(0xFF1E1E24)).clickable { showDrawer = true }, contentAlignment = Alignment.Center) {
+            // 画三条横线作为菜单图标
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Box(Modifier.width(16.dp).height(2.dp).background(textColor))
+                Box(Modifier.width(16.dp).height(2.dp).background(textColor))
+                Box(Modifier.width(16.dp).height(2.dp).background(textColor))
             }
         }
     }
@@ -166,9 +208,10 @@ fun BottomInputBar(accentColor: Color, textColor: Color, subTextColor: Color) {
                 Text("步数(0为无限):", color = subTextColor, fontSize = 12.sp)
                 Spacer(Modifier.width(4.dp))
                 TextField(
-                    value = maxStepsStr, onValueChange = { if (it.all { char -> char.isDigit() }) maxStepsStr = it },
-                    modifier = Modifier.width(50.dp).height(28.dp).clip(RoundedCornerShape(4.dp)).background(Color.Black),
-                    textStyle = LocalTextStyle.current.copy(fontSize = 12.sp, color = textColor),
+                    value = maxStepsStr, 
+                    onValueChange = { if (it.all { char -> char.isDigit() }) maxStepsStr = it },
+                    modifier = Modifier.width(60.dp).height(32.dp).clip(RoundedCornerShape(4.dp)).background(Color.Black),
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, color = Color.White),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     singleLine = true
                 )
