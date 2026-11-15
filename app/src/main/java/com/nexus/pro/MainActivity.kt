@@ -17,6 +17,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -73,7 +75,7 @@ fun TaskTimeline(modifier: Modifier, textColor: Color, subTextColor: Color, acce
     val client = remember { NetworkClient() }
     val loop = remember { AgentLoop(client) }
     
-    var steps by remember { mutableStateListOf<AgentStep>() }
+    var steps by remember { mutableStateOf(listOf<AgentStep>()) }
     var isRunning by remember { mutableStateOf(false) }
     var statusMsg by remember { mutableStateOf("") }
     var isReady by remember { mutableStateOf(false) }
@@ -86,15 +88,14 @@ fun TaskTimeline(modifier: Modifier, textColor: Color, subTextColor: Color, acce
 
     val startTask = { prompt: String, maxSteps: Int, thinkLevel: String ->
         if (isReady && !isRunning) {
-            steps.clear()
+            steps = emptyList()
             isRunning = true
             statusMsg = "初始化..."
             loop.start(prompt, maxSteps, thinkLevel, scope) { ev ->
                 when (ev) {
-                    is AgentEvent.StepAdded -> steps.add(ev.step)
+                    is AgentEvent.StepAdded -> steps = steps + ev.step
                     is AgentEvent.ResultUpdated -> {
-                        val idx = steps.indexOfFirst { it.stepId == ev.stepId }
-                        if (idx != -1) steps[idx] = steps[idx].copy(result = ev.output, isCompleted = true, isError = ev.code != 0)
+                        steps = steps.map { if (it.stepId == ev.stepId) it.copy(result = ev.output, isCompleted = true, isError = ev.code != 0) else it }
                     }
                     is AgentEvent.StatusUpdate -> statusMsg = ev.msg
                     is AgentEvent.Done -> { isRunning = false; statusMsg = "任务完成" }
@@ -119,7 +120,7 @@ fun TaskTimeline(modifier: Modifier, textColor: Color, subTextColor: Color, acce
             }
         }
 
-        items(steps, key = { it.stepId }) { step ->
+        items(steps, key = { step -> step.stepId }) { step ->
             TimelineStepItem(step, accentColor, textColor, subTextColor)
         }
         
